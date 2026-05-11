@@ -15,17 +15,22 @@ import ssl
 import threading
 import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
-from mqtt_config import load_mqtt_config
+import os
 
 load_dotenv()
 
 # ── Broker config ──────────────────────────────────────────────────────────
 CLIENT_ID = "python-wildlife-monitor"
-cfg = load_mqtt_config()
 
-MQTT_BROKER = cfg["broker"]
-MQTT_PORT   = cfg["port"]
-MQTT_TOPIC  = cfg["topic"]
+MQTT_BROKER = os.environ.get("MQTT_BROKER", "localhost")
+MQTT_PORT = int(os.environ.get("MQTT_PORT", 1883))
+MQTT_TOPIC = os.environ.get("MQTT_TOPIC", "#")
+MQTT_USERNAME = os.environ.get("MQTT_USERNAME", "")
+MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD", "")
+MQTT_SSL = os.environ.get("MQTT_SSL", "false").lower() == "true"
+MQTT_SSL_VERIFY = os.environ.get("MQTT_SSL_VERIFY", "false").lower() == "true"
+MQTT_CA_CERT = None
+
 
 
 def build_client(client_id: str) -> mqtt.Client:
@@ -35,16 +40,16 @@ def build_client(client_id: str) -> mqtt.Client:
         protocol=mqtt.MQTTv311,
     )
     client.reconnect_delay_set(min_delay=2, max_delay=30)
-    if cfg["username"]:
-        client.username_pw_set(cfg["username"], cfg["password"])
-    if cfg["ssl"]:
-        cert_reqs = ssl.CERT_REQUIRED if cfg["ssl_verify"] else ssl.CERT_NONE
+    if MQTT_USERNAME:
+        client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+    if MQTT_SSL:
+        cert_reqs = ssl.CERT_REQUIRED if MQTT_SSL_VERIFY else ssl.CERT_NONE
         client.tls_set(
-            ca_certs=cfg["ca_cert"],
+            ca_certs=MQTT_CA_CERT,
             cert_reqs=cert_reqs,
             tls_version=ssl.PROTOCOL_TLS_CLIENT,
         )
-        if not cfg["ssl_verify"]:
+        if not MQTT_SSL_VERIFY:
             client.tls_insecure_set(True)
     return client
 

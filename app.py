@@ -11,7 +11,6 @@ from dotenv import load_dotenv
 from flask import Flask, request, abort
 import requests
 import paho.mqtt.client as mqtt
-from mqtt_config import load_mqtt_config
 
 load_dotenv()
 
@@ -20,10 +19,14 @@ app = Flask(__name__)
 CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 
-_mqtt_cfg  = load_mqtt_config()
-MQTT_BROKER = _mqtt_cfg["broker"]
-MQTT_PORT   = _mqtt_cfg["port"]
-MQTT_TOPIC  = _mqtt_cfg["topic"]
+MQTT_BROKER = os.environ.get("MQTT_BROKER", "localhost")
+MQTT_PORT = int(os.environ.get("MQTT_PORT", 1883))
+MQTT_TOPIC = os.environ.get("MQTT_TOPIC", "#")
+MQTT_USERNAME = os.environ.get("MQTT_USERNAME", "")
+MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD", "")
+MQTT_SSL = os.environ.get("MQTT_SSL", "false").lower() == "true"
+MQTT_SSL_VERIFY = os.environ.get("MQTT_SSL_VERIFY", "false").lower() == "true"
+MQTT_CA_CERT = None
 
 LINE_REPLY_URL     = "https://api.line.me/v2/bot/message/reply"
 LINE_BROADCAST_URL = "https://api.line.me/v2/bot/message/broadcast"
@@ -166,12 +169,12 @@ def start_mqtt():
         protocol=mqtt.MQTTv311,
     )
     client.reconnect_delay_set(min_delay=2, max_delay=30)
-    if _mqtt_cfg["username"]:
-        client.username_pw_set(_mqtt_cfg["username"], _mqtt_cfg["password"])
-    if _mqtt_cfg["ssl"]:
-        cert_reqs = ssl.CERT_REQUIRED if _mqtt_cfg["ssl_verify"] else ssl.CERT_NONE
-        client.tls_set(ca_certs=_mqtt_cfg["ca_cert"], cert_reqs=cert_reqs)
-        if not _mqtt_cfg["ssl_verify"]:
+    if MQTT_USERNAME:
+        client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+    if MQTT_SSL:
+        cert_reqs = ssl.CERT_REQUIRED if MQTT_SSL_VERIFY else ssl.CERT_NONE
+        client.tls_set(ca_certs=MQTT_CA_CERT, cert_reqs=cert_reqs)
+        if not MQTT_SSL_VERIFY:
             client.tls_insecure_set(True)
     client.on_connect = on_connect
     client.on_message = on_message
