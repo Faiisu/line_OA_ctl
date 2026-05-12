@@ -13,6 +13,7 @@ import json
 import time
 import ssl
 import threading
+import random
 import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
 import os
@@ -111,10 +112,15 @@ def run_publish(lat: float, lon: float, acc: float, alt: float):
         client.loop_stop()
         return
 
-    payload = json.dumps({"lat": lat, "lon": lon, "acc": acc, "alt": alt})
-    info = client.publish(MQTT_TOPIC, payload, qos=1)
-    info.wait_for_publish(timeout=5)
-    print(f"[PUB] Sent → {payload}  (mid={info.mid})")
+    for i in range(100):
+        payload = json.dumps({"Pressure": random.randint(10, 16),
+                            "Temperature": random.randint(175, 180),
+                            "WaterLevel": random.randint(50, 70),
+                            "time": time.strftime("%Y-%m-%d %H:%M:%S")})
+        info = client.publish(MQTT_TOPIC, payload, qos=1)
+        info.wait_for_publish(timeout=5)
+        print(f"[PUB] Sent → {payload}  (mid={info.mid})")
+        time.sleep(1)
 
     client.loop_stop()
     client.disconnect()
@@ -136,6 +142,7 @@ def main():
         run_subscribe()
     else:
         run_publish(args.lat, args.lon, args.acc, args.alt)
+            
 
 
 if __name__ == "__main__":

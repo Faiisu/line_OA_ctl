@@ -6,11 +6,13 @@ import json
 import threading
 import random
 import matplotlib.pyplot as plt
+import seaborn as sns
 import time
 from dotenv import load_dotenv
-from flask import Flask, request, abort
+from flask import Flask, request, abort, send_from_directory
 import requests
 import paho.mqtt.client as mqtt
+from collections import deque
 
 load_dotenv()
 
@@ -31,36 +33,87 @@ MQTT_CA_CERT = None
 LINE_REPLY_URL     = "https://api.line.me/v2/bot/message/reply"
 LINE_BROADCAST_URL = "https://api.line.me/v2/bot/message/broadcast"
 
-# ---------- Image Generator (for demonstration) ----------
-def generate_graph_image(data_string: str):
+# Data storage for sensor logs
+MAX_DATA_POINTS = 50  # Keep last 50 readings
+sensor_data = {
+    'timestamps': deque(maxlen=MAX_DATA_POINTS),
+    'pressure': deque(maxlen=MAX_DATA_POINTS),
+    'temperature': deque(maxlen=MAX_DATA_POINTS),
+    'water_level': deque(maxlen=MAX_DATA_POINTS)
+}
+
+# ---------- Image Generator (Aesthetic Version) ----------
+def generate_graph_image():
     """
-    Parses MQTT data and saves a plot to the static folder.
-    Assumes data is a comma-separated string of numbers like "10,20,15,30"
+    Generates a beautiful graph from stored sensor data and saves to static folder.
     """
     try:
-        # Convert payload to list of floats
-        data_points = [float(x.strip()) for x in data_string.split(",")]
+        # Set non-interactive backend for thread safety
+        plt.switch_backend('Agg')
         
-        plt.figure(figsize=(10, 5))
-        plt.plot(data_points, marker='o', linestyle='-', color='b')
-        plt.title(f"MQTT Data Stream - {time.strftime('%H:%M:%S')}")
-        plt.xlabel("Sample Index")
-        plt.ylabel("Value")
-        plt.grid(True)
-
+        if not sensor_data['timestamps']:
+            return False
+            
+        # Apply Seaborn style for a modern, clean look
+        sns.set_theme(style="whitegrid", context="paper")
+            
+        # Create subplots for each sensor
+        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
+        timestamps = list(sensor_data['timestamps'])
+        latest_time = timestamps[-1] if timestamps else time.strftime("%H:%M:%S")
+        
+        # Main Title
+        fig.suptitle(f'Boiler Operation - Latest: {latest_time}', fontsize=16, fontweight='bold', y=0.96)
+        
+        pressure = list(sensor_data['pressure'])
+        temperature = list(sensor_data['temperature'])
+        water_level = list(sensor_data['water_level'])
+        
+        # 1. Pressure plot
+        ax1.plot(timestamps, pressure, color='#1f77b4', marker='o', linewidth=2.5, markersize=5)
+        ax1.set_title('Pressure', fontweight='bold')
+        ax1.set_ylabel('Pressure')
+        ax1.set_ylim(0, 20)  # <-- กำหนด Range Pressure: 0 ถึง 20
+        
+        # 2. Temperature plot
+        ax2.plot(timestamps, temperature, color='#d62728', marker='s', linewidth=2.5, markersize=5)
+        ax2.set_title('Temperature', fontweight='bold')
+        ax2.set_ylabel('Temperature (°C)')
+        ax2.set_ylim(150, 200)  # <-- กำหนด Range Temperature: 150 ถึง 200
+        
+        # 3. Water Level plot
+        ax3.plot(timestamps, water_level, color='#2ca02c', marker='^', linewidth=2.5, markersize=5)
+        ax3.set_title('Water Level', fontweight='bold')
+        ax3.set_xlabel('Time', fontweight='bold')
+        ax3.set_ylabel('Water Level')
+        ax3.set_ylim(0, 100)  # <-- กำหนด Range Water Level: 0 ถึง 100
+        
+        # Clean up axes styling
+        for ax in (ax1, ax2, ax3):
+            ax.tick_params(axis='x', rotation=45)
+            # Remove top and right spines (borders) for minimalist look
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            # Make bottom and left spines slightly lighter
+            ax.spines['left'].set_color('#CCCCCC')
+            ax.spines['bottom'].set_color('#CCCCCC')
+        
+        # Adjust layout tightly so labels don't get cut off
+        plt.tight_layout(rect=[0, 0.02, 1, 0.95])
+        plt.subplots_adjust(hspace=0.4)
+        
         # Ensure static folder exists
         if not os.path.exists('static'):
             os.makedirs('static')
 
-        save_path = "static/graph.png"
-        plt.savefig(save_path)
+        save_path = "./static/graph.png"
+        # HIGH RESOLUTION SAVE (dpi=300)
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close() # Important: Close plot to free up memory
         return True
     except Exception as e:
         print(f"[Error] Failed to generate graph: {e}")
         return False
-    
-
 
 # ---------- LINE helpers ----------
 
@@ -79,7 +132,6 @@ def reply_message(reply_token: str, messages: list):
 
 
 def broadcast_to_all(messages: list):
-    
     payload = {"messages": messages}
     resp = requests.post(LINE_BROADCAST_URL, headers=_line_headers(), json=payload)
     resp.raise_for_status()
@@ -94,7 +146,46 @@ def handle_message(event: dict):
 
     if msg_type == "text":
         user_text = event["message"]["text"]
-        reply_message(reply_token, [{"type": "text", "text": f"You said: {user_text}"}])
+        
+        # Check if user is requesting graph
+        if user_text.lower() in ["graph", "chart", "data", "show graph"]:
+            # Send the latest graph
+            BASE_URL = os.environ.get("BASE_URL", "http://localhost:5050")
+            timestamp = int(time.time())
+            image_url = f"{BASE_URL}/static/graph.png?t={timestamp}"
+            
+            image_message = {
+                "type": "image",
+                "originalContentUrl": image_url,
+                "previewImageUrl": image_url
+            }
+            
+            text_message = {
+                "type": "text",
+                "text": "Here's the latest sensor data graph:"
+            }
+            
+            reply_message(reply_token, [text_message, image_message])
+        elif user_text.lower() in ["latest", "current", "status"]:
+            if sensor_data['timestamps']:
+                latest_time = sensor_data['timestamps'][-1]
+                latest_pressure = sensor_data['pressure'][-1]
+                latest_temperature = sensor_data['temperature'][-1]
+                latest_water_level = sensor_data['water_level'][-1]
+                
+                status_message = (
+                    f"==[Boiler Status Update]==\n"
+                    f"Latest data (as of {latest_time}):\n"
+                    f"Pressure: {latest_pressure}\n"
+                    f"Temperature: {latest_temperature}°C\n"
+                    f"Water Level: {latest_water_level}"
+                )
+            else:
+                status_message = "No sensor data available yet."
+            
+            reply_message(reply_token, [{"type": "text", "text": status_message}])
+        else:
+            reply_message(reply_token, [{"type": "text", "text": f"You said: {user_text}. Send 'graph' to see sensor data."}])
     elif msg_type == "sticker":
         reply_message(reply_token, [{"type": "text", "text": "Nice sticker!"}])
     else:
@@ -132,33 +223,50 @@ def on_connect(client, _userdata, _flags, reason_code, _properties):
 
 
 def on_message(_client, _userdata, msg):
-    payload = [random.randint(0, 10) for _ in range(10)]
-    topic = msg.topic
-    print(f"[MQTT] Received data from {topic}")
-    BASE_URL = os.environ.get("BASE_URL", "http://localhost:5050")
-    # Generate the graph
-    success = generate_graph_image(",".join(map(str, payload)))
-
-    if success:
-        # We add a timestamp (cache buster) so LINE doesn't show an old cached image
-        timestamp = int(time.time())
-        image_url = f"{BASE_URL}/static/graph.png?t={timestamp}"
+    try:
+        # Parse JSON payload
+        payload = json.loads(msg.payload.decode('utf-8'))
+        topic = msg.topic
+        print(f"[MQTT] Received data from {topic}: {payload}")
         
-        image_message = {
-            "type": "image",
-            "originalContentUrl": image_url,
-            "previewImageUrl": image_url
-        }
+        # Extract sensor values
+        pressure = payload.get('Pressure', 0)
+        temperature = payload.get('Temperature', 0)
+        water_level = payload.get('WaterLevel', 0)
+        time_label = payload.get('time', time.strftime("%Y-%m-%d %H:%M:%S"))
         
-        text_message = {
-            "type": "text",
-            "text": f"New update from {topic}!"
-        }
+        # Store data with timestamp label from payload
+        sensor_data['timestamps'].append(time_label)
+        sensor_data['pressure'].append(pressure)
+        sensor_data['temperature'].append(temperature)
+        sensor_data['water_level'].append(water_level)
+        
+        # Generate updated graph
+        success = generate_graph_image()
+        
+        if success:
+            BASE_URL = os.environ.get("BASE_URL", "http://localhost:5050")
+            # We add a timestamp (cache buster) so LINE doesn't show an old cached image
+            timestamp = int(time.time())
+            image_url = f"{BASE_URL}/static/graph.png?t={timestamp}"
+            
+            image_message = {
+                "type": "image",
+                "originalContentUrl": image_url,
+                "previewImageUrl": image_url
+            }
+            
+            text_message = {
+                "type": "text",
+                "text": f"New sensor data: Pressure={pressure}, Temperature={temperature}, WaterLevel={water_level}"
+            }
 
-        broadcast_to_all([text_message, image_message])
-    else:
-        # Fallback if graph fails
-        broadcast_to_all([{"type": "text", "text": f"Data received but graph failed: {payload}"}])
+            # broadcast_to_all([text_message, image_message])
+            
+    except json.JSONDecodeError as e:
+        print(f"[MQTT] Failed to parse JSON payload: {e}")
+    except Exception as e:
+        print(f"[MQTT] Error processing message: {e}")
 
 
 def start_mqtt():
@@ -212,6 +320,10 @@ def webhook():
 
     return "OK", 200
 
+
+@app.route("/static/<path:filename>")
+def serve_static(filename):
+    return send_from_directory('static', filename)
 
 @app.route("/", methods=["GET"])
 def health():
